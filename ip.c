@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdint.h>
 #include <sys/socket.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
@@ -97,6 +98,61 @@ static void ip_link_show(const char *filter_dev) {
 
 // ===================== ROUTE =====================
 
+static const char *get_table_name(uint32_t id) {
+    switch (id) {
+        case RT_TABLE_UNSPEC: return "unspec";
+        case RT_TABLE_COMPAT: return "compat";
+        case RT_TABLE_DEFAULT: return "default";
+        case RT_TABLE_MAIN: return "main";
+        case RT_TABLE_LOCAL: return "local";
+        default: return NULL;
+    }
+}
+
+static const char *get_proto_name(unsigned char proto) {
+    switch (proto) {
+        case RTPROT_UNSPEC: return "unspec";
+        case RTPROT_REDIRECT: return "redirect";
+        case RTPROT_KERNEL: return "kernel";
+        case RTPROT_BOOT: return "boot";
+        case RTPROT_STATIC: return "static";
+#ifdef RTPROT_GATED
+        case RTPROT_GATED: return "gated";
+#endif
+#ifdef RTPROT_RA
+        case RTPROT_RA: return "ra";
+#endif
+#ifdef RTPROT_MRT
+        case RTPROT_MRT: return "mrt";
+#endif
+#ifdef RTPROT_ZEBRA
+        case RTPROT_ZEBRA: return "zebra";
+#endif
+#ifdef RTPROT_BIRD
+        case RTPROT_BIRD: return "bird";
+#endif
+#ifdef RTPROT_DNROUTED
+        case RTPROT_DNROUTED: return "dnrouted";
+#endif
+#ifdef RTPROT_XORP
+        case RTPROT_XORP: return "xorp";
+#endif
+#ifdef RTPROT_NTK
+        case RTPROT_NTK: return "ntk";
+#endif
+#ifdef RTPROT_DHCP
+        case RTPROT_DHCP: return "dhcp";
+#endif
+#ifdef RTPROT_MROUTED
+        case RTPROT_MROUTED: return "mrouted";
+#endif
+#ifdef RTPROT_BABEL
+        case RTPROT_BABEL: return "babel";
+#endif
+        default: return NULL;
+    }
+}
+
 static void parse_route(struct nlmsghdr *nlh, const char *filter_dev) {
     struct rtmsg *rtm = NLMSG_DATA(nlh);
 
@@ -108,6 +164,9 @@ static void parse_route(struct nlmsghdr *nlh, const char *filter_dev) {
     char dst[INET6_ADDRSTRLEN] = "";
     char gw[INET6_ADDRSTRLEN] = "";
     char dev[IF_NAMESIZE] = "";
+    
+    // Fetch initial table ID from route message header
+    uint32_t table_id = rtm->rtm_table;
 
     for (; RTA_OK(rta, rtl); rta = RTA_NEXT(rta, rtl)) {
         switch (rta->rta_type) {
@@ -121,6 +180,11 @@ static void parse_route(struct nlmsghdr *nlh, const char *filter_dev) {
                 int idx;
                 memcpy(&idx, RTA_DATA(rta), sizeof(idx));
                 if_indextoname(idx, dev);
+                break;
+            }
+            case RTA_TABLE: {
+                // Extended table ID (takes priority over rtm->rtm_table)
+                memcpy(&table_id, RTA_DATA(rta), sizeof(table_id));
                 break;
             }
         }
@@ -140,7 +204,19 @@ static void parse_route(struct nlmsghdr *nlh, const char *filter_dev) {
     if (strlen(dev))
         printf("dev %s ", dev);
 
-    printf("\n");
+    // Print out the protocol
+    const char *proto_name = get_proto_name(rtm->rtm_protocol);
+    if (proto_name)
+        printf("proto %s ", proto_name);
+    else
+        printf("proto %u ", rtm->rtm_protocol);
+
+    // Print out the table ID
+    const char *table_name = get_table_name(table_id);
+    if (table_name)
+        printf("table %s\n", table_name);
+    else
+        printf("table %u\n", table_id);
 }
 
 static void ip_route_show(const char *dev) {
