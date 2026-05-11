@@ -18,8 +18,16 @@
 #define BUF_SIZE 32768
 #define MAX_INTERFACES 256
 
-// GLOBAL FILTER: Moved to the top so parsing functions can access it
+// GLOBAL FILTER
 static int af_filter = AF_UNSPEC;
+static int use_color = 1;
+
+// ===================== COLOR HELPERS =====================
+
+static const char *c_ifname(void) { return use_color ? "\033[36m" : ""; } /* Cyan */
+static const char *c_ip(void)     { return use_color ? "\033[35m" : ""; } /* Magenta */
+static const char *c_mac(void)    { return use_color ? "\033[32m" : ""; } /* Green */
+static const char *c_reset(void)  { return use_color ? "\033[0m"  : ""; } /* Reset */
 
 // ===================== NETLINK HELPERS =====================
 
@@ -74,7 +82,7 @@ static void ip_link_show(const char *filter_dev) {
         }
 
         /* Optimized Output formatting */
-        printf("%s: <", ifa->ifa_name);
+        printf("%s%s%s: <", c_ifname(), ifa->ifa_name, c_reset());
         int first = 1;
         unsigned int flags = ifa->ifa_flags;
         
@@ -196,13 +204,13 @@ static void parse_route(struct nlmsghdr *nlh, const char *filter_dev) {
     if (strlen(dst) == 0)
         printf("default ");
     else
-        printf("%s/%d ", dst, rtm->rtm_dst_len);
+        printf("%s%s/%d%s ", c_ip(), dst, rtm->rtm_dst_len, c_reset());
 
     if (strlen(gw))
-        printf("via %s ", gw);
+        printf("via %s%s%s ", c_ip(), gw, c_reset());
 
     if (strlen(dev))
-        printf("dev %s ", dev);
+        printf("dev %s%s%s ", c_ifname(), dev, c_reset());
 
     // Print out the protocol
     const char *proto_name = get_proto_name(rtm->rtm_protocol);
@@ -296,7 +304,7 @@ static void parse_addr(struct nlmsghdr *nlh, const char *filter_dev) {
         return;
 
     if (strlen(addr))
-        printf("%s %s/%d\n", dev, addr, ifa->ifa_prefixlen);
+        printf("%s%s%s %s%s/%d%s\n", c_ifname(), dev, c_reset(), c_ip(), addr, ifa->ifa_prefixlen, c_reset());
 }
 
 static void ip_addr_show(const char *dev) {
@@ -388,25 +396,37 @@ static void parse_neigh(struct nlmsghdr *nlh, const char *filter_dev) {
     }
 
     if (ip[0]) 
-        printf("%s ", ip);
+        printf("%s%s%s ", c_ip(), ip, c_reset());
         
-    printf("dev %s ", ifname[0] ? ifname : "?");
+    printf("dev %s%s%s ", c_ifname(), ifname[0] ? ifname : "?", c_reset());
 
     if (tb[NDA_LLADDR]) {
         unsigned char *mac = RTA_DATA(tb[NDA_LLADDR]);
         int maclen = RTA_PAYLOAD(tb[NDA_LLADDR]);
 
-        printf("lladdr ");
+        printf("lladdr %s", c_mac());
         for (int i = 0; i < maclen; i++) {
             printf("%02x%s", mac[i], (i + 1 < maclen) ? ":" : "");
         }
-        printf(" ");
+        printf("%s ", c_reset());
     }
 
     if (ndm->ndm_flags & NTF_ROUTER)
         printf("router ");
 
     // Map common neighbor states to standard ip output
+    const char *state_color = c_reset();
+    if (use_color) {
+        if (ndm->ndm_state & NUD_PERMANENT) state_color = "\033[32m";       // Green
+        else if (ndm->ndm_state & NUD_REACHABLE) state_color = "\033[32m";  // Green
+        else if (ndm->ndm_state & NUD_STALE) state_color = "\033[33m";      // Yellow
+        else if (ndm->ndm_state & NUD_DELAY) state_color = "\033[33m";      // Yellow
+        else if (ndm->ndm_state & NUD_PROBE) state_color = "\033[33m";      // Yellow
+        else if (ndm->ndm_state & NUD_FAILED) state_color = "\033[31m";     // Red
+        else if (ndm->ndm_state & NUD_INCOMPLETE) state_color = "\033[31m"; // Red
+    }
+
+    printf("%s", state_color);
     if (ndm->ndm_state & NUD_PERMANENT) printf("PERMANENT ");
     else if (ndm->ndm_state & NUD_NOARP) printf("NOARP ");
     else if (ndm->ndm_state & NUD_REACHABLE) printf("REACHABLE ");
@@ -418,7 +438,7 @@ static void parse_neigh(struct nlmsghdr *nlh, const char *filter_dev) {
     else if (ndm->ndm_state == NUD_NONE) printf("NONE ");
     else printf("state 0x%x ", ndm->ndm_state);
 
-    printf("\n");
+    printf("%s\n", c_reset());
 }
 
 static void ip_neigh_show(const char *dev) {
@@ -479,23 +499,31 @@ static void ip_neigh_show(const char *dev) {
 int main(int argc, char *argv[]) {
     int argi = 1;
 
-    // Parse optional -4 / -6
-    if (argc > 1) {
+    // Parse options: -4, -6, -c, --color, -nc, --no-color
+    while (argi < argc) {
         if (strcmp(argv[argi], "-4") == 0) {
             af_filter = AF_INET;
             argi++;
         } else if (strcmp(argv[argi], "-6") == 0) {
             af_filter = AF_INET6;
             argi++;
+        } else if (strcmp(argv[argi], "-c") == 0 || strcmp(argv[argi], "-color") == 0 || strcmp(argv[argi], "--color") == 0) {
+            use_color = 1;
+            argi++;
+        } else if (strcmp(argv[argi], "-nc") == 0 || strcmp(argv[argi], "--no-color") == 0) {
+            use_color = 0;
+            argi++;
+        } else {
+            break;
         }
     }
 
     if (argc - argi < 2) {
         fprintf(stderr, "Usage:\n");
-        fprintf(stderr, "  %s [-4|-6] link show [dev]\n", argv[0]);
-        fprintf(stderr, "  %s [-4|-6] route show [dev]\n", argv[0]);
-        fprintf(stderr, "  %s [-4|-6] addr show [dev]\n", argv[0]);
-        fprintf(stderr, "  %s [-4|-6] neigh show [dev]\n", argv[0]);
+        fprintf(stderr, "  %s [-c|-nc] [-4|-6] link show [dev]\n", argv[0]);
+        fprintf(stderr, "  %s [-c|-nc] [-4|-6] route show [dev]\n", argv[0]);
+        fprintf(stderr, "  %s [-c|-nc] [-4|-6] addr show [dev]\n", argv[0]);
+        fprintf(stderr, "  %s [-c|-nc] [-4|-6] neigh show [dev]\n", argv[0]);
         return 1;
     }
 
