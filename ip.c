@@ -23,6 +23,8 @@
 static int af_filter = AF_UNSPEC;
 static int use_color = 1;
 static uint16_t nud_filter = 0;
+static uint32_t route_table_filter = 0;
+static int route_proto_filter = -1;
 static struct {
     int family;
     int bitlen;
@@ -168,11 +170,32 @@ static const char *get_proto_name(unsigned char proto) {
     }
 }
 
+static uint32_t parse_table(const char *name) {
+    if (strcmp(name, "main") == 0) return RT_TABLE_MAIN;
+    if (strcmp(name, "local") == 0) return RT_TABLE_LOCAL;
+    if (strcmp(name, "default") == 0) return RT_TABLE_DEFAULT;
+    if (strcmp(name, "compat") == 0) return RT_TABLE_COMPAT;
+    if (strcmp(name, "unspec") == 0) return RT_TABLE_UNSPEC;
+    return (uint32_t)strtoul(name, NULL, 0);
+}
+
+static int parse_proto(const char *name) {
+    if (strcmp(name, "kernel") == 0) return RTPROT_KERNEL;
+    if (strcmp(name, "boot") == 0) return RTPROT_BOOT;
+    if (strcmp(name, "static") == 0) return RTPROT_STATIC;
+    if (strcmp(name, "redirect") == 0) return RTPROT_REDIRECT;
+    return atoi(name);
+}
+
 static void parse_route(struct nlmsghdr *nlh, const char *filter_dev) {
     struct rtmsg *rtm = NLMSG_DATA(nlh);
 
     if (af_filter != AF_UNSPEC && rtm->rtm_family != af_filter)
         return;
+
+    if (route_proto_filter != -1 && rtm->rtm_protocol != route_proto_filter)
+        return;
+
     struct rtattr *rta = RTM_RTA(rtm);
     int rtl = RTM_PAYLOAD(nlh);
 
@@ -204,6 +227,9 @@ static void parse_route(struct nlmsghdr *nlh, const char *filter_dev) {
             }
         }
     }
+
+    if (route_table_filter != 0 && table_id != route_table_filter)
+        return;
 
     if (filter_dev && strlen(filter_dev) > 0 && strcmp(filter_dev, dev) != 0)
         return;
@@ -280,6 +306,81 @@ static void ip_route_show(const char *dev) {
 
             if (nlh->nlmsg_type == RTM_NEWROUTE)
                 parse_route(nlh, dev);
+        }
+    }
+
+    close(sock);
+}
+
+static void ip_route_get(const char *dst_str, const char *src_str) {
+    int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+    if (sock < 0) { perror("socket"); return; }
+
+    struct {
+        struct nlmsghdr nlh;
+        struct rtmsg rtm;
+        char buf[256];
+    } req = {0};
+
+    req.nlh.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+    req.nlh.nlmsg_type = RTM_GETROUTE;
+    req.nlh.nlmsg_flags = NLM_F_REQUEST;
+    req.nlh.nlmsg_seq = 4;
+
+    unsigned char addr[16];
+    int family = AF_INET;
+    if (inet_pton(AF_INET, dst_str, addr) > 0) {
+        family = AF_INET;
+    } else if (inet_pton(AF_INET6, dst_str, addr) > 0) {
+        family = AF_INET6;
+    } else {
+        fprintf(stderr, "Invalid address: %s\n", dst_str);
+        close(sock);
+        return;
+    }
+
+    req.rtm.rtm_family = (unsigned char)family;
+    req.rtm.rtm_dst_len = (unsigned char)((family == AF_INET) ? 32 : 128);
+
+    struct rtattr *rta = (struct rtattr *)(((char *)&req) + NLMSG_ALIGN(req.nlh.nlmsg_len));
+    rta->rta_type = RTA_DST;
+    rta->rta_len = (unsigned short)RTA_LENGTH((family == AF_INET) ? 4 : 16);
+    memcpy(RTA_DATA(rta), addr, (size_t)((family == AF_INET) ? 4 : 16));
+    req.nlh.nlmsg_len = (uint32_t)(NLMSG_ALIGN(req.nlh.nlmsg_len) + RTA_ALIGN(rta->rta_len));
+
+    if (src_str) {
+        unsigned char saddr[16];
+        if (inet_pton(family, src_str, saddr) > 0) {
+            struct rtattr *rta_src = (struct rtattr *)(((char *)&req) + NLMSG_ALIGN(req.nlh.nlmsg_len));
+            rta_src->rta_type = RTA_SRC;
+            rta_src->rta_len = (unsigned short)RTA_LENGTH((family == AF_INET) ? 4 : 16);
+            memcpy(RTA_DATA(rta_src), saddr, (size_t)((family == AF_INET) ? 4 : 16));
+            req.nlh.nlmsg_len = (uint32_t)(NLMSG_ALIGN(req.nlh.nlmsg_len) + RTA_ALIGN(rta_src->rta_len));
+            req.rtm.rtm_src_len = (unsigned char)((family == AF_INET) ? 32 : 128);
+        } else {
+            fprintf(stderr, "Invalid source address: %s\n", src_str);
+        }
+    }
+
+    if (nl_send(sock, &req.nlh) < 0) {
+        perror("sendmsg"); close(sock); return;
+    }
+
+    char res_buf[BUF_SIZE];
+    int len = (int)recv(sock, res_buf, sizeof(res_buf), 0);
+    if (len < 0) { perror("recv"); close(sock); return; }
+
+    struct nlmsghdr *nlh = (struct nlmsghdr *)res_buf;
+    for (; NLMSG_OK(nlh, len); nlh = NLMSG_NEXT(nlh, len)) {
+        if (nlh->nlmsg_seq != 4) continue;
+        if (nlh->nlmsg_type == NLMSG_ERROR) {
+            struct nlmsgerr *err = NLMSG_DATA(nlh);
+            if (err->error < 0)
+                fprintf(stderr, "Netlink error: %s\n", strerror(-err->error));
+            break;
+        }
+        if (nlh->nlmsg_type == RTM_NEWROUTE) {
+            parse_route(nlh, NULL);
         }
     }
 
@@ -586,7 +687,8 @@ int main(int argc, char *argv[]) {
     if (argc - argi < 2) {
         fprintf(stderr, "Usage:\n");
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] link show [dev]\n", argv[0]);
-        fprintf(stderr, "  %s [-c|-nc] [-4|-6] route show [dev]\n", argv[0]);
+        fprintf(stderr, "  %s [-c|-nc] [-4|-6] route show [dev] [table TABLE] [proto PROTO]\n", argv[0]);
+        fprintf(stderr, "  %s [-c|-nc] [-4|-6] route get ADDR [from ADDR]\n", argv[0]);
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] addr show [dev]\n", argv[0]);
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] neigh show [dev] [nud STATE] [to PREFIX]\n", argv[0]);
         return 1;
@@ -595,9 +697,37 @@ int main(int argc, char *argv[]) {
     if (strcmp(argv[argi], "link") == 0 && strcmp(argv[argi+1], "show") == 0) {
         const char *dev = (argc - argi >= 3) ? argv[argi+2] : NULL;
         ip_link_show(dev);
-    } else if (strcmp(argv[argi], "route") == 0 && strcmp(argv[argi+1], "show") == 0) {
-        const char *dev = (argc - argi >= 3) ? argv[argi+2] : NULL;
-        ip_route_show(dev);
+    } else if (strcmp(argv[argi], "route") == 0) {
+        if (argi + 1 < argc && strcmp(argv[argi+1], "show") == 0) {
+            const char *dev = NULL;
+            for (int i = argi + 2; i < argc; i++) {
+                if (strcmp(argv[i], "dev") == 0 && i + 1 < argc) {
+                    dev = argv[++i];
+                } else if (strcmp(argv[i], "table") == 0 && i + 1 < argc) {
+                    route_table_filter = parse_table(argv[++i]);
+                } else if (strcmp(argv[i], "proto") == 0 && i + 1 < argc) {
+                    route_proto_filter = parse_proto(argv[++i]);
+                } else if (dev == NULL) {
+                    dev = argv[i];
+                }
+            }
+            ip_route_show(dev);
+        } else if (argi + 1 < argc && strcmp(argv[argi+1], "get") == 0) {
+            if (argi + 2 < argc) {
+                const char *dst = argv[argi+2];
+                const char *src = NULL;
+                if (argi + 4 < argc && strcmp(argv[argi+3], "from") == 0) {
+                    src = argv[argi+4];
+                }
+                ip_route_get(dst, src);
+            } else {
+                fprintf(stderr, "Usage: %s route get ADDR [from ADDR]\n", argv[0]);
+                return 1;
+            }
+        } else {
+            fprintf(stderr, "Invalid route command\n");
+            return 1;
+        }
     } else if (strcmp(argv[argi], "addr") == 0 && strcmp(argv[argi+1], "show") == 0) {
         const char *dev = (argc - argi >= 3) ? argv[argi+2] : NULL;
         ip_addr_show(dev);
