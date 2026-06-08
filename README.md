@@ -12,7 +12,7 @@ Starting with Android 13, Google heavily restricted userland access to network i
 - **neigh**: View the neighbor table (ARP cache for IPv4, NDP for IPv6) and MAC addresses.
 - **Color output**: Syntax-highlighted output with cyan (interface names), magenta (IP addresses), and green (MAC addresses). Enabled by default.
 - **Address family filtering**: Global filtering for IPv4 (-4) and IPv6 (-6), as well as filtering output by a specific network device.
-- **Route filtering**: Filter routes by table (e.g., local, main) and protocol (e.g., kernel, static).
+- **Route filtering**: Filter routes by table (e.g., local, main), protocol (e.g., kernel, static), and scope (e.g., global, link, host).
 - **Neighbor filtering**: Filter neighbors by address/prefix (e.g., 192.168.1.0/24) and NUD (Neighbor Unreachability Detection) states such as reachable, stale, etc.
 
 ## Building in Termux
@@ -74,6 +74,7 @@ View the Android routing table.
 ./mini_ip -4 route show         # Show only IPv4 routes
 ./mini_ip -6 route show eth0    # Show only IPv6 routes on eth0
 ./mini_ip route show table local # Show local table
+./mini_ip route show scope link  # Show only link-scope routes
 ./mini_ip route get 8.8.8.8      # Look up route to 8.8.8.8
 ./mini_ip route get 8.8.8.8 from 192.168.1.10 # Look up route with source IP
 ```

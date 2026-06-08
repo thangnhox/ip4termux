@@ -25,6 +25,7 @@ static int use_color = 1;
 static uint16_t nud_filter = 0;
 static uint32_t route_table_filter = 0;
 static int route_proto_filter = -1;
+static int route_scope_filter = -1;
 static struct {
     int family;
     int bitlen;
@@ -170,6 +171,17 @@ static const char *get_proto_name(unsigned char proto) {
     }
 }
 
+static const char *get_scope_name(unsigned char scope) {
+    switch (scope) {
+        case RT_SCOPE_UNIVERSE: return "global";
+        case RT_SCOPE_NOWHERE: return "nowhere";
+        case RT_SCOPE_HOST: return "host";
+        case RT_SCOPE_LINK: return "link";
+        case RT_SCOPE_SITE: return "site";
+        default: return NULL;
+    }
+}
+
 static uint32_t parse_table(const char *name) {
     if (strcmp(name, "main") == 0) return RT_TABLE_MAIN;
     if (strcmp(name, "local") == 0) return RT_TABLE_LOCAL;
@@ -187,6 +199,15 @@ static int parse_proto(const char *name) {
     return atoi(name);
 }
 
+static int parse_scope(const char *name) {
+    if (strcmp(name, "global") == 0 || strcmp(name, "universe") == 0) return RT_SCOPE_UNIVERSE;
+    if (strcmp(name, "nowhere") == 0) return RT_SCOPE_NOWHERE;
+    if (strcmp(name, "host") == 0) return RT_SCOPE_HOST;
+    if (strcmp(name, "link") == 0) return RT_SCOPE_LINK;
+    if (strcmp(name, "site") == 0) return RT_SCOPE_SITE;
+    return atoi(name);
+}
+
 static void parse_route(struct nlmsghdr *nlh, const char *filter_dev) {
     struct rtmsg *rtm = NLMSG_DATA(nlh);
 
@@ -194,6 +215,9 @@ static void parse_route(struct nlmsghdr *nlh, const char *filter_dev) {
         return;
 
     if (route_proto_filter != -1 && rtm->rtm_protocol != route_proto_filter)
+        return;
+
+    if (route_scope_filter != -1 && rtm->rtm_scope != route_scope_filter)
         return;
 
     struct rtattr *rta = RTM_RTA(rtm);
@@ -244,6 +268,15 @@ static void parse_route(struct nlmsghdr *nlh, const char *filter_dev) {
 
     if (strlen(dev))
         printf("dev %s%s%s ", c_ifname(), dev, c_reset());
+
+    // Print out the scope
+    if (rtm->rtm_scope != RT_SCOPE_UNIVERSE) {
+        const char *scope_name = get_scope_name(rtm->rtm_scope);
+        if (scope_name)
+            printf("scope %s ", scope_name);
+        else
+            printf("scope %u ", rtm->rtm_scope);
+    }
 
     // Print out the protocol
     const char *proto_name = get_proto_name(rtm->rtm_protocol);
@@ -687,7 +720,7 @@ int main(int argc, char *argv[]) {
     if (argc - argi < 2) {
         fprintf(stderr, "Usage:\n");
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] link show [dev]\n", argv[0]);
-        fprintf(stderr, "  %s [-c|-nc] [-4|-6] route show [dev] [table TABLE] [proto PROTO]\n", argv[0]);
+        fprintf(stderr, "  %s [-c|-nc] [-4|-6] route show [dev] [table TABLE] [proto PROTO] [scope SCOPE]\n", argv[0]);
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] route get ADDR [from ADDR]\n", argv[0]);
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] addr show [dev]\n", argv[0]);
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] neigh show [dev] [nud STATE] [to PREFIX]\n", argv[0]);
@@ -707,6 +740,8 @@ int main(int argc, char *argv[]) {
                     route_table_filter = parse_table(argv[++i]);
                 } else if (strcmp(argv[i], "proto") == 0 && i + 1 < argc) {
                     route_proto_filter = parse_proto(argv[++i]);
+                } else if (strcmp(argv[i], "scope") == 0 && i + 1 < argc) {
+                    route_scope_filter = parse_scope(argv[++i]);
                 } else if (dev == NULL) {
                     dev = argv[i];
                 }
