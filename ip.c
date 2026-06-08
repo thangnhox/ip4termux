@@ -23,6 +23,11 @@
 static int af_filter = AF_UNSPEC;
 static int use_color = 1;
 static uint16_t nud_filter = 0;
+static struct {
+    int family;
+    int bitlen;
+    unsigned char addr[16];
+} addr_filter = { AF_UNSPEC, 0, {0} };
 
 // ===================== COLOR HELPERS =====================
 
@@ -363,6 +368,29 @@ static void ip_addr_show(const char *dev) {
 
 // ===================== NEIGHBOR =====================
 
+static int parse_prefix(const char *prefix) {
+    char *slash = strchr(prefix, '/');
+    char buf[INET6_ADDRSTRLEN] = {0};
+    if (slash) {
+        size_t len = (size_t)(slash - prefix);
+        if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+        strncpy(buf, prefix, len);
+    } else {
+        strncpy(buf, prefix, sizeof(buf) - 1);
+    }
+    
+    if (inet_pton(AF_INET, buf, addr_filter.addr) > 0) {
+        addr_filter.family = AF_INET;
+        addr_filter.bitlen = slash ? atoi(slash + 1) : 32;
+    } else if (inet_pton(AF_INET6, buf, addr_filter.addr) > 0) {
+        addr_filter.family = AF_INET6;
+        addr_filter.bitlen = slash ? atoi(slash + 1) : 128;
+    } else {
+        return -1;
+    }
+    return 0;
+}
+
 static uint16_t parse_nud_state(const char *state) {
     if (strcasecmp(state, "permanent") == 0) return NUD_PERMANENT;
     if (strcasecmp(state, "noarp") == 0) return NUD_NOARP;
@@ -395,6 +423,25 @@ static void parse_neigh(struct nlmsghdr *nlh, const char *filter_dev) {
         if (rta->rta_type <= NDA_MAX)
             tb[rta->rta_type] = rta;
         rta = RTA_NEXT(rta, attr_len);
+    }
+
+    if (addr_filter.family != AF_UNSPEC) {
+        if (ndm->ndm_family != addr_filter.family)
+            return;
+        if (tb[NDA_DST]) {
+            unsigned char *neigh_addr = RTA_DATA(tb[NDA_DST]);
+            int bytes = addr_filter.bitlen / 8;
+            int bits = addr_filter.bitlen % 8;
+            if (memcmp(neigh_addr, addr_filter.addr, (size_t)bytes) != 0)
+                return;
+            if (bits > 0) {
+                unsigned char mask = (unsigned char)(0xFF << (8 - bits));
+                if ((neigh_addr[bytes] & mask) != (addr_filter.addr[bytes] & mask))
+                    return;
+            }
+        } else {
+            return;
+        }
     }
 
     char ip[INET6_ADDRSTRLEN] = {0};
@@ -541,7 +588,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] link show [dev]\n", argv[0]);
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] route show [dev]\n", argv[0]);
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] addr show [dev]\n", argv[0]);
-        fprintf(stderr, "  %s [-c|-nc] [-4|-6] neigh show [dev] [nud STATE]\n", argv[0]);
+        fprintf(stderr, "  %s [-c|-nc] [-4|-6] neigh show [dev] [nud STATE] [to PREFIX]\n", argv[0]);
         return 1;
     }
 
@@ -561,8 +608,12 @@ int main(int argc, char *argv[]) {
                 dev = argv[++i];
             } else if (strcmp(argv[i], "nud") == 0 && i + 1 < argc) {
                 nud_filter |= parse_nud_state(argv[++i]);
-            } else if (dev == NULL) {
+            } else if (strcmp(argv[i], "to") == 0 && i + 1 < argc) {
+                parse_prefix(argv[++i]);
+            } else if (dev == NULL && strchr(argv[i], '.') == NULL && strchr(argv[i], ':') == NULL) {
                 dev = argv[i];
+            } else {
+                parse_prefix(argv[i]);
             }
         }
         ip_neigh_show(dev);
