@@ -14,6 +14,7 @@ Starting with Android 13, Google heavily restricted userland access to network i
 - **Address family filtering**: Global filtering for IPv4 (-4) and IPv6 (-6), as well as filtering output by a specific network device.
 - **Route filtering**: Filter routes by table (e.g., local, main), protocol (e.g., kernel, static), and scope (e.g., global, link, host).
 - **Neighbor filtering**: Filter neighbors by address/prefix (e.g., 192.168.1.0/24) and NUD (Neighbor Unreachability Detection) states such as reachable, stale, etc.
+- **iproute2-style CLI**: Modular command parser supporting aliases (e.g., `list`, `lst`, `address`, `neighbor`) and dynamic program name identification from `argv[0]`.
 
 ## Building in Termux
 
@@ -35,13 +36,15 @@ clang -O2 -Wall ip.c -o mini_ip
 ## Command-line Options
 
 ```
-./mini_ip [-c | -nc] [-4 | -6] <object> show [dev]
+./mini_ip [-c | -nc] [-4 | -6] <object> { show | list | help } [args...]
 ```
 
 - `-4`: Show only IPv4 addresses, routes, or neighbors.
 - `-6`: Show only IPv6 addresses, routes, or neighbors.
 - `-c, -color, --color`: Enable colored output (default).
 - `-nc, --no-color`: Disable colored output.
+
+You can also use `<object> help` to see specific usage for that object.
 
 ### Objects and Examples
 
@@ -53,6 +56,7 @@ View all network interfaces visible to the Termux app sandbox.
 ./mini_ip link show
 ./mini_ip link show wlan0
 ./mini_ip -nc link show         # Disable colored output
+./mini_ip link help             # Show link usage details
 ```
 
 #### Addr (IP Addresses)

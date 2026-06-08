@@ -26,6 +26,7 @@ static uint16_t nud_filter = 0;
 static uint32_t route_table_filter = 0;
 static int route_proto_filter = -1;
 static int route_scope_filter = -1;
+static const char *p_name = "ip";
 static struct {
     int family;
     int bitlen;
@@ -112,6 +113,36 @@ static void ip_link_show(const char *filter_dev) {
     }
 
     freeifaddrs(ifaddr);
+}
+
+static int do_link(int argc, char **argv) {
+    if (argc > 0 && strcmp(argv[0], "help") == 0) {
+        fprintf(stderr, "Usage: %s link show [dev]\n", p_name);
+        return 0;
+    }
+    if (argc == 0 || strcmp(argv[0], "show") == 0 || strcmp(argv[0], "lst") == 0 || strcmp(argv[0], "list") == 0) {
+        const char *dev = (argc > 1) ? argv[1] : NULL;
+        ip_link_show(dev);
+        return 0;
+    }
+    fprintf(stderr, "Command \"%s\" is unknown, try \"%s link help\".\n", argv[0], p_name);
+    return -1;
+}
+
+static void ip_addr_show(const char *dev);
+
+static int do_addr(int argc, char **argv) {
+    if (argc > 0 && strcmp(argv[0], "help") == 0) {
+        fprintf(stderr, "Usage: %s addr show [dev]\n", p_name);
+        return 0;
+    }
+    if (argc == 0 || strcmp(argv[0], "show") == 0 || strcmp(argv[0], "lst") == 0 || strcmp(argv[0], "list") == 0) {
+        const char *dev = (argc > 1) ? argv[1] : NULL;
+        ip_addr_show(dev);
+        return 0;
+    }
+    fprintf(stderr, "Command \"%s\" is unknown, try \"%s addr help\".\n", argv[0], p_name);
+    return -1;
 }
 
 // ===================== ROUTE =====================
@@ -693,9 +724,110 @@ static void ip_neigh_show(const char *dev) {
 }
 
 
+static void ip_route_show(const char *dev);
+static void ip_route_get(const char *dst, const char *src);
+
+static int do_route(int argc, char **argv) {
+    if (argc > 0 && strcmp(argv[0], "help") == 0) {
+        fprintf(stderr, "Usage: %s route show [dev] [table TABLE] [proto PROTO] [scope SCOPE]\n", p_name);
+        fprintf(stderr, "       %s route get ADDR [from ADDR]\n", p_name);
+        return 0;
+    }
+    if (argc == 0 || strcmp(argv[0], "show") == 0 || strcmp(argv[0], "lst") == 0 || strcmp(argv[0], "list") == 0) {
+        const char *dev = NULL;
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "dev") == 0 && i + 1 < argc) {
+                dev = argv[++i];
+            } else if (strcmp(argv[i], "table") == 0 && i + 1 < argc) {
+                route_table_filter = parse_table(argv[++i]);
+            } else if (strcmp(argv[i], "proto") == 0 && i + 1 < argc) {
+                route_proto_filter = parse_proto(argv[++i]);
+            } else if (strcmp(argv[i], "scope") == 0 && i + 1 < argc) {
+                route_scope_filter = parse_scope(argv[++i]);
+            } else if (dev == NULL) {
+                dev = argv[i];
+            }
+        }
+        ip_route_show(dev);
+        return 0;
+    }
+    if (strcmp(argv[0], "get") == 0) {
+        if (argc < 2) {
+            fprintf(stderr, "Usage: %s route get ADDR [from ADDR]\n", p_name);
+            return -1;
+        }
+        const char *dst = argv[1];
+        const char *src = NULL;
+        if (argc >= 4 && strcmp(argv[2], "from") == 0) {
+            src = argv[3];
+        }
+        ip_route_get(dst, src);
+        return 0;
+    }
+    fprintf(stderr, "Command \"%s\" is unknown, try \"%s route help\".\n", argv[0], p_name);
+    return -1;
+}
+
+static void ip_neigh_show(const char *dev);
+
+static int do_neigh(int argc, char **argv) {
+    if (argc > 0 && strcmp(argv[0], "help") == 0) {
+        fprintf(stderr, "Usage: %s neigh show [dev] [nud STATE] [to PREFIX]\n", p_name);
+        return 0;
+    }
+    if (argc == 0 || strcmp(argv[0], "show") == 0 || strcmp(argv[0], "lst") == 0 || strcmp(argv[0], "list") == 0) {
+        const char *dev = NULL;
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "dev") == 0 && i + 1 < argc) {
+                dev = argv[++i];
+            } else if (strcmp(argv[i], "nud") == 0 && i + 1 < argc) {
+                nud_filter |= parse_nud_state(argv[++i]);
+            } else if (strcmp(argv[i], "to") == 0 && i + 1 < argc) {
+                parse_prefix(argv[++i]);
+            } else if (dev == NULL && strchr(argv[i], '.') == NULL && strchr(argv[i], ':') == NULL) {
+                dev = argv[i];
+            } else {
+                parse_prefix(argv[i]);
+            }
+        }
+        ip_neigh_show(dev);
+        return 0;
+    }
+    fprintf(stderr, "Command \"%s\" is unknown, try \"%s neigh help\".\n", argv[0], p_name);
+    return -1;
+}
+
+static void usage(void) {
+    fprintf(stderr, "Usage: %s [OPTIONS] OBJECT { COMMAND | help }\n", p_name);
+    fprintf(stderr, "where  OBJECT := { link | addr | route | neigh }\n");
+    fprintf(stderr, "       OPTIONS := { -4 | -6 | -c | -nc }\n");
+}
+
+static int do_help(int argc, char **argv) {
+    usage();
+    return 0;
+}
+
 // ===================== MAIN =====================
 
+struct cmd {
+    const char *cmd;
+    int (*func)(int argc, char **argv);
+};
+
+static const struct cmd cmds[] = {
+    { "address", do_addr },
+    { "addr",    do_addr },
+    { "link",    do_link },
+    { "route",   do_route },
+    { "neighbor", do_neigh },
+    { "neigh",   do_neigh },
+    { "help",    do_help },
+    { NULL,      NULL }
+};
+
 int main(int argc, char *argv[]) {
+    if (argc > 0) p_name = argv[0];
     int argi = 1;
 
     // Parse options: -4, -6, -c, --color, -nc, --no-color
@@ -712,80 +844,26 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[argi], "-nc") == 0 || strcmp(argv[argi], "--no-color") == 0) {
             use_color = 0;
             argi++;
+        } else if (strcmp(argv[argi], "-h") == 0 || strcmp(argv[argi], "--help") == 0) {
+            usage();
+            return 0;
         } else {
             break;
         }
     }
 
-    if (argc - argi < 2) {
-        fprintf(stderr, "Usage:\n");
-        fprintf(stderr, "  %s [-c|-nc] [-4|-6] link show [dev]\n", argv[0]);
-        fprintf(stderr, "  %s [-c|-nc] [-4|-6] route show [dev] [table TABLE] [proto PROTO] [scope SCOPE]\n", argv[0]);
-        fprintf(stderr, "  %s [-c|-nc] [-4|-6] route get ADDR [from ADDR]\n", argv[0]);
-        fprintf(stderr, "  %s [-c|-nc] [-4|-6] addr show [dev]\n", argv[0]);
-        fprintf(stderr, "  %s [-c|-nc] [-4|-6] neigh show [dev] [nud STATE] [to PREFIX]\n", argv[0]);
+    if (argi >= argc) {
+        usage();
         return 1;
     }
 
-    if (strcmp(argv[argi], "link") == 0 && strcmp(argv[argi+1], "show") == 0) {
-        const char *dev = (argc - argi >= 3) ? argv[argi+2] : NULL;
-        ip_link_show(dev);
-    } else if (strcmp(argv[argi], "route") == 0) {
-        if (argi + 1 < argc && strcmp(argv[argi+1], "show") == 0) {
-            const char *dev = NULL;
-            for (int i = argi + 2; i < argc; i++) {
-                if (strcmp(argv[i], "dev") == 0 && i + 1 < argc) {
-                    dev = argv[++i];
-                } else if (strcmp(argv[i], "table") == 0 && i + 1 < argc) {
-                    route_table_filter = parse_table(argv[++i]);
-                } else if (strcmp(argv[i], "proto") == 0 && i + 1 < argc) {
-                    route_proto_filter = parse_proto(argv[++i]);
-                } else if (strcmp(argv[i], "scope") == 0 && i + 1 < argc) {
-                    route_scope_filter = parse_scope(argv[++i]);
-                } else if (dev == NULL) {
-                    dev = argv[i];
-                }
-            }
-            ip_route_show(dev);
-        } else if (argi + 1 < argc && strcmp(argv[argi+1], "get") == 0) {
-            if (argi + 2 < argc) {
-                const char *dst = argv[argi+2];
-                const char *src = NULL;
-                if (argi + 4 < argc && strcmp(argv[argi+3], "from") == 0) {
-                    src = argv[argi+4];
-                }
-                ip_route_get(dst, src);
-            } else {
-                fprintf(stderr, "Usage: %s route get ADDR [from ADDR]\n", argv[0]);
-                return 1;
-            }
-        } else {
-            fprintf(stderr, "Invalid route command\n");
-            return 1;
+    const char *object = argv[argi++];
+    for (const struct cmd *c = cmds; c->cmd; c++) {
+        if (strcmp(object, c->cmd) == 0) {
+            return c->func(argc - argi, argv + argi);
         }
-    } else if (strcmp(argv[argi], "addr") == 0 && strcmp(argv[argi+1], "show") == 0) {
-        const char *dev = (argc - argi >= 3) ? argv[argi+2] : NULL;
-        ip_addr_show(dev);
-    } else if ((strcmp(argv[argi], "neigh") == 0 || strcmp(argv[argi], "neighbor") == 0) && strcmp(argv[argi+1], "show") == 0) {
-        const char *dev = NULL;
-        for (int i = argi + 2; i < argc; i++) {
-            if (strcmp(argv[i], "dev") == 0 && i + 1 < argc) {
-                dev = argv[++i];
-            } else if (strcmp(argv[i], "nud") == 0 && i + 1 < argc) {
-                nud_filter |= parse_nud_state(argv[++i]);
-            } else if (strcmp(argv[i], "to") == 0 && i + 1 < argc) {
-                parse_prefix(argv[++i]);
-            } else if (dev == NULL && strchr(argv[i], '.') == NULL && strchr(argv[i], ':') == NULL) {
-                dev = argv[i];
-            } else {
-                parse_prefix(argv[i]);
-            }
-        }
-        ip_neigh_show(dev);
-    } else {
-        fprintf(stderr, "Invalid command\n");
-        return 1;
     }
 
-    return 0;
+    fprintf(stderr, "Object \"%s\" is unknown, try \"%s help\".\n", object, p_name);
+    return 1;
 }
