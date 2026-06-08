@@ -12,6 +12,7 @@ Starting with Android 13, Google heavily restricted userland access to network i
 - **neigh**: View the neighbor table (ARP cache for IPv4, NDP for IPv6) and MAC addresses.
 - **Color output**: Syntax-highlighted output with cyan (interface names), magenta (IP addresses), and green (MAC addresses). Enabled by default.
 - **Address family filtering**: Global filtering for IPv4 (-4) and IPv6 (-6), as well as filtering output by a specific network device.
+- **Neighbor state filtering**: Filter neighbors by NUD (Neighbor Unreachability Detection) states such as reachable, stale, etc.
 
 ## Building in Termux
 
@@ -82,6 +83,8 @@ View known network neighbors and their MAC addresses.
 ./mini_ip neighbor show wlan0
 ./mini_ip -4 neigh show         # Show only IPv4 neighbors (ARP)
 ./mini_ip -6 -nc neigh show     # Show IPv6 neighbors without color
+./mini_ip neigh show nud reachable  # Show only reachable neighbors
+./mini_ip neigh show nud stale nud delay # Show stale or delay neighbors
 ```
 
 ## Limitations

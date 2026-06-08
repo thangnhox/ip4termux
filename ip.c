@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <errno.h>
 #include <stdint.h>
@@ -21,6 +22,7 @@
 // GLOBAL FILTER
 static int af_filter = AF_UNSPEC;
 static int use_color = 1;
+static uint16_t nud_filter = 0;
 
 // ===================== COLOR HELPERS =====================
 
@@ -361,10 +363,26 @@ static void ip_addr_show(const char *dev) {
 
 // ===================== NEIGHBOR =====================
 
+static uint16_t parse_nud_state(const char *state) {
+    if (strcasecmp(state, "permanent") == 0) return NUD_PERMANENT;
+    if (strcasecmp(state, "noarp") == 0) return NUD_NOARP;
+    if (strcasecmp(state, "reachable") == 0) return NUD_REACHABLE;
+    if (strcasecmp(state, "stale") == 0) return NUD_STALE;
+    if (strcasecmp(state, "delay") == 0) return NUD_DELAY;
+    if (strcasecmp(state, "probe") == 0) return NUD_PROBE;
+    if (strcasecmp(state, "failed") == 0) return NUD_FAILED;
+    if (strcasecmp(state, "incomplete") == 0) return NUD_INCOMPLETE;
+    if (strcasecmp(state, "none") == 0) return NUD_NONE;
+    return 0;
+}
+
 static void parse_neigh(struct nlmsghdr *nlh, const char *filter_dev) {
     struct ndmsg *ndm = NLMSG_DATA(nlh);
 
     if (af_filter != AF_UNSPEC && ndm->ndm_family != af_filter)
+        return;
+
+    if (nud_filter && !(ndm->ndm_state & nud_filter))
         return;
 
     int attr_len = nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*ndm));
@@ -523,7 +541,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] link show [dev]\n", argv[0]);
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] route show [dev]\n", argv[0]);
         fprintf(stderr, "  %s [-c|-nc] [-4|-6] addr show [dev]\n", argv[0]);
-        fprintf(stderr, "  %s [-c|-nc] [-4|-6] neigh show [dev]\n", argv[0]);
+        fprintf(stderr, "  %s [-c|-nc] [-4|-6] neigh show [dev] [nud STATE]\n", argv[0]);
         return 1;
     }
 
@@ -537,7 +555,16 @@ int main(int argc, char *argv[]) {
         const char *dev = (argc - argi >= 3) ? argv[argi+2] : NULL;
         ip_addr_show(dev);
     } else if ((strcmp(argv[argi], "neigh") == 0 || strcmp(argv[argi], "neighbor") == 0) && strcmp(argv[argi+1], "show") == 0) {
-        const char *dev = (argc - argi >= 3) ? argv[argi+2] : NULL;
+        const char *dev = NULL;
+        for (int i = argi + 2; i < argc; i++) {
+            if (strcmp(argv[i], "dev") == 0 && i + 1 < argc) {
+                dev = argv[++i];
+            } else if (strcmp(argv[i], "nud") == 0 && i + 1 < argc) {
+                nud_filter |= parse_nud_state(argv[++i]);
+            } else if (dev == NULL) {
+                dev = argv[i];
+            }
+        }
         ip_neigh_show(dev);
     } else {
         fprintf(stderr, "Invalid command\n");
